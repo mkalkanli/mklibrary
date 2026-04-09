@@ -1,6 +1,7 @@
 import os
 import datetime
 import gspread
+
 from google.oauth2.service_account import Credentials
 from telegram import Update
 from telegram.ext import (
@@ -24,17 +25,91 @@ creds = Credentials.from_service_account_file(
     GOOGLE_CREDENTIALS_FILE,
     scopes=SCOPES
 )
-gc = gspread.authorize(creds)
-sheet = gc.open(GOOGLE_SHEET_NAME).sheet1
+
+client = gspread.authorize(creds)
+sheet = client.open(GOOGLE_SHEET_NAME).sheet1
 
 user_state = {}
 
+
+def ensure_header():
+    rows = sheet.get_all_values()
+    if not rows:
+        sheet.append_row([
+            "ID",
+            "Kitap Adı",
+            "Yazar",
+            "Kategori",
+            "Durum",
+            "Raf",
+            "Not",
+            "Tarih"
+        ])
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Kütüphane botuna hoş geldin 📚\n/ekle /liste /ara")
+    await update.message.reply_text(
+        "Kütüphane botuna hoş geldin 📚\n\n"
+        "Komutlar:\n"
+        "/ekle\n"
+        "/liste\n"
+        "/ara kitap_adi"
+    )
+
 
 async def ekle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_state[update.effective_user.id] = {"step": "kitap"}
     await update.message.reply_text("Kitap adı?")
+
+
+async def liste(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rows = sheet.get_all_values()
+
+    if len(rows) <= 1:
+        await update.message.reply_text("Kütüphane boş.")
+        return
+
+    data = rows[1:]
+    mesajlar = []
+
+    for row in data[:20]:
+        kitap = row[1] if len(row) > 1 else ""
+        yazar = row[2] if len(row) > 2 else ""
+        durum = row[4] if len(row) > 4 else ""
+        mesajlar.append(f"📖 {kitap} - {yazar} [{durum}]")
+
+    await update.message.reply_text("\n".join(mesajlar))
+
+
+async def ara(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = " ".join(context.args).strip().lower()
+
+    if not query:
+        await update.message.reply_text("Örnek kullanım:\n/ara simyacı")
+        return
+
+    rows = sheet.get_all_values()
+
+    if len(rows) <= 1:
+        await update.message.reply_text("Kayıt yok.")
+        return
+
+    data = rows[1:]
+    sonuc = []
+
+    for row in data:
+        kitap = row[1] if len(row) > 1 else ""
+        yazar = row[2] if len(row) > 2 else ""
+
+        if query in kitap.lower() or query in yazar.lower():
+            sonuc.append(f"📖 {kitap} - {yazar}")
+
+    if not sonuc:
+        await update.message.reply_text("Bulunamadı.")
+        return
+
+    await update.message.reply_text("\n".join(sonuc[:20]))
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -43,71 +118,55 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     state = user_state[user_id]
+    text = update.message.text.strip()
 
     if state["step"] == "kitap":
-        state["kitap"] = update.message.text
+        state["kitap"] = text
         state["step"] = "yazar"
         await update.message.reply_text("Yazar?")
         return
 
     if state["step"] == "yazar":
-        state["yazar"] = update.message.text
+        state["yazar"] = text
         state["step"] = "kategori"
         await update.message.reply_text("Kategori?")
         return
 
     if state["step"] == "kategori":
-        state["kategori"] = update.message.text
+        state["kategori"] = text
+
+        yeni_id = str(int(datetime.datetime.now().timestamp()))
+        tarih = datetime.datetime.now().strftime("%Y-%m-%d")
 
         sheet.append_row([
-            str(int(datetime.datetime.now().timestamp())),
+            yeni_id,
             state["kitap"],
             state["yazar"],
             state["kategori"],
             "Evde",
             "",
             "",
-            datetime.datetime.now().strftime("%Y-%m-%d")
+            tarih
         ])
 
         await update.message.reply_text("Kitap eklendi ✅")
         user_state.pop(user_id, None)
 
-async def liste(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    rows = sheet.get_all_values()[1:]
 
-    if not rows:
-        await update.message.reply_text("Kütüphane boş")
-        return
+def main():
+    ensure_header()
 
-    mesaj = ""
-    for r in rows[:10]:
-        mesaj += f"📖 {r[1]} - {r[2]}\n"
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    await update.message.reply_text(mesaj)
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("ekle", ekle))
+    app.add_handler(CommandHandler("liste", liste))
+    app.add_handler(CommandHandler("ara", ara))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-async def ara(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = " ".join(context.args).lower()
-    rows = sheet.get_all_values()[1:]
+    print("Bot çalışıyor...")
+    app.run_polling()
 
-    sonuc = [r for r in rows if query in r[1].lower()]
 
-    if not sonuc:
-        await update.message.reply_text("Bulunamadı")
-        return
-
-    mesaj = ""
-    for r in sonuc:
-        mesaj += f"📖 {r[1]} - {r[2]}\n"
-
-    await update.message.reply_text(mesaj)
-
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("ekle", ekle))
-app.add_handler(CommandHandler("liste", liste))
-app.add_handler(CommandHandler("ara", ara))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-app.run_polling()
+if __name__ == "__main__":
+    main()
