@@ -1,22 +1,36 @@
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+import os
+import datetime
 import gspread
 from google.oauth2.service_account import Credentials
-import datetime
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
-# Google Sheets bağlantı
-scope = ["https://spreadsheets.google.com/feeds",
-         "https://www.googleapis.com/auth/drive"]
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+GOOGLE_SHEET_NAME = os.environ["GOOGLE_SHEET_NAME"]
+GOOGLE_CREDENTIALS_FILE = os.environ.get("GOOGLE_CREDENTIALS_FILE", "credentials.json")
 
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
-client = gspread.authorize(creds)
-sheet = client.open("Kutuphane").sheet1
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
 
-# Geçici kullanıcı state
+creds = Credentials.from_service_account_file(
+    GOOGLE_CREDENTIALS_FILE,
+    scopes=SCOPES
+)
+gc = gspread.authorize(creds)
+sheet = gc.open(GOOGLE_SHEET_NAME).sheet1
+
 user_state = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Kütüphane botuna hoş geldin 📚\n/ekle /ara /liste")
+    await update.message.reply_text("Kütüphane botuna hoş geldin 📚\n/ekle /liste /ara")
 
 async def ekle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_state[update.effective_user.id] = {"step": "kitap"}
@@ -45,9 +59,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state["step"] == "kategori":
         state["kategori"] = update.message.text
 
-        # Google Sheets'e ekle
         sheet.append_row([
-            str(datetime.datetime.now().timestamp()),
+            str(int(datetime.datetime.now().timestamp())),
             state["kitap"],
             state["yazar"],
             state["kategori"],
@@ -58,7 +71,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
 
         await update.message.reply_text("Kitap eklendi ✅")
-        user_state.pop(user_id)
+        user_state.pop(user_id, None)
 
 async def liste(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = sheet.get_all_values()[1:]
@@ -89,12 +102,12 @@ async def ara(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(mesaj)
 
-app = ApplicationBuilder().token("BOT_TOKEN").build()
+app = ApplicationBuilder().token(BOT_TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("ekle", ekle))
 app.add_handler(CommandHandler("liste", liste))
 app.add_handler(CommandHandler("ara", ara))
-app.add_handler(MessageHandler(filters.TEXT, handle_message))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 app.run_polling()
